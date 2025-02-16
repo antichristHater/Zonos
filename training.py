@@ -264,16 +264,28 @@ def train_zonos(
                     audio_input = audio_input[..., :target_length]
                 
                 with torch.no_grad():
-                    target_codes = model.autoencoder.encode(audio_input)  # Should now work with shape [1, 1, 1323000]
+                    target_codes = model.autoencoder.encode(audio_input)  # Shape: [1, num_codebooks, seq_len]
                     target_codes = target_codes.to(device)
                 
                 # Forward pass
-                output = model(conditioning)
+                output = model(conditioning)  # Shape: [batch_size, num_codebooks, seq_len, vocab_size]
                 
                 # Calculate token prediction loss
-                # Reshape output and target_codes to match dimensions
-                output = output.view(-1, output.size(-1))  # [batch * seq_len, vocab_size]
-                target_codes = target_codes.view(-1)  # [batch * seq_len]
+                # Ensure output and target_codes have compatible shapes
+                target_codes = target_codes.squeeze(0)  # Remove batch dimension from target_codes
+                
+                # Get the minimum sequence length between output and target
+                seq_len = min(output.size(2), target_codes.size(-1))
+                
+                # Truncate both tensors to the same sequence length
+                output = output[..., :seq_len, :]  # [batch_size, num_codebooks, seq_len, vocab_size]
+                target_codes = target_codes[..., :seq_len]  # [num_codebooks, seq_len]
+                
+                # Reshape for cross entropy
+                output = output.permute(0, 2, 1, 3)  # [batch_size, seq_len, num_codebooks, vocab_size]
+                output = output.reshape(-1, output.size(-1))  # [batch_size * seq_len * num_codebooks, vocab_size]
+                target_codes = target_codes.permute(1, 0)  # [seq_len, num_codebooks]
+                target_codes = target_codes.reshape(-1)  # [seq_len * num_codebooks]
                 
                 token_loss = torch.nn.functional.cross_entropy(output, target_codes)
                 
