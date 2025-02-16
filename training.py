@@ -37,48 +37,61 @@ class AudioPreprocessor:
     def __init__(self, sample_rate: int = 16000, max_length_seconds: float = 30.0):
         self.sample_rate = sample_rate
         self.max_length = int(max_length_seconds * sample_rate)
-        self.hop_length = 256  # Standard hop length for mel spectrograms
-        self.max_mel_length = self.max_length // self.hop_length
+        
+        # Mel spectrogram parameters
+        self.n_fft = 1024
+        self.win_length = int(0.025 * sample_rate)  # 25ms window
+        self.hop_length = int(0.01 * sample_rate)   # 10ms hop
+        self.n_mels = 80
+        
+        # Calculate maximum mel length to ensure consistent sizes
+        self.max_mel_length = (self.max_length - self.n_fft) // self.hop_length + 3
         
         self.mel_transform = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
-            n_fft=1024,
+            n_fft=self.n_fft,
+            win_length=self.win_length,
             hop_length=self.hop_length,
-            n_mels=80
+            n_mels=self.n_mels,
+            f_min=0,
+            f_max=8000,
+            window_fn=torch.hann_window,
+            normalized=True
         )
         
     def process(self, wav: torch.Tensor, augment: bool = True) -> torch.Tensor:
-        # Ensure audio length is consistent
+        """Process audio and return processed audio."""
+        # Ensure audio is 2D (channels, time)
+        if wav.dim() == 1:
+            wav = wav.unsqueeze(0)
+        
+        # Convert to mono if stereo
+        if wav.size(0) > 1:
+            wav = wav.mean(0, keepdim=True)
+            
+        # Ensure consistent length
         if wav.size(-1) > self.max_length:
-            wav = wav[..., :self.max_length]
+            start = 0  # Always take from start for consistency
+            wav = wav[..., start:start + self.max_length]
         else:
             # Pad with zeros if too short
             pad_length = self.max_length - wav.size(-1)
             wav = torch.nn.functional.pad(wav, (0, pad_length))
             
-        # Normalize audio
+        # Normalize audio to [-1, 1]
         wav = wav / (torch.max(torch.abs(wav)) + 1e-8)
         
         if augment:
             # Random volume adjustment
             wav = wav * (0.8 + 0.4 * torch.rand(1))
             
-            # Random noise addition
+            # Random noise addition (SNR between 20-30dB)
             if torch.rand(1) < 0.5:
-                noise = torch.randn_like(wav) * 0.01
+                noise_level = 10 ** (-torch.rand(1) * 10 - 20)  # -20 to -30 dB
+                noise = torch.randn_like(wav) * noise_level
                 wav = wav + noise
         
-        # Convert to mel spectrogram
-        mel = self.mel_transform(wav)
-        
-        # Ensure mel spectrogram length is consistent
-        if mel.size(-1) > self.max_mel_length:
-            mel = mel[..., :self.max_mel_length]
-        else:
-            pad_length = self.max_mel_length - mel.size(-1)
-            mel = torch.nn.functional.pad(mel, (0, pad_length))
-            
-        return mel
+        return wav
 
 class ZonosHFDataset(Dataset):
     def __init__(
@@ -120,26 +133,38 @@ class ZonosHFDataset(Dataset):
         wav = torch.FloatTensor(audio['array'])
         sr = audio['sampling_rate']
         
-        if len(wav.shape) == 1:
+        # Ensure 2D (channels, time)
+        if wav.dim() == 1:
             wav = wav.unsqueeze(0)
+            
+        # Convert to mono if stereo
+        if wav.size(0) > 1:
+            wav = wav.mean(0, keepdim=True)
             
         # Resample if necessary
         if sr != self.sampling_rate:
             wav = torchaudio.functional.resample(wav, sr, self.sampling_rate)
         
+        # Ensure fixed length (30 seconds)
+        target_length = 30 * self.sampling_rate
+        if wav.size(-1) > target_length:
+            wav = wav[..., :target_length]
+        else:
+            # Pad with zeros if too short
+            pad_length = target_length - wav.size(-1)
+            wav = torch.nn.functional.pad(wav, (0, pad_length))
+        
         # Process audio
-        mel_spectrogram = self.audio_processor.process(wav)
+        wav = self.audio_processor.process(wav)
         
         # Get emotion vector
-        emotion = self.get_emotion(idx)
-        emotion_tensor = torch.tensor(emotion)
+        emotion = torch.tensor(self.get_emotion(idx), dtype=torch.float32)
         
         return {
-            'audio': wav,
-            'mel_spectrogram': mel_spectrogram,
+            'audio': wav.squeeze(0),  # Remove channel dimension for speaker model
             'text': item['sentence'],
             'language': self.language,
-            'emotion': emotion_tensor
+            'emotion': emotion
         }
 
 def train_zonos(
@@ -147,7 +172,7 @@ def train_zonos(
     dataset_name="mozilla-foundation/common_voice_17_0",
     language="uz",
     output_dir="checkpoints",
-    batch_size=8,
+    batch_size=4,  # Reduced batch size
     learning_rate=1e-4,
     num_epochs=10,
     device="cuda" if torch.cuda.is_available() else "cpu",
@@ -168,13 +193,9 @@ def train_zonos(
         dataset, 
         batch_size=batch_size, 
         shuffle=True, 
-        num_workers=4,
+        num_workers=2,  # Reduced number of workers
         collate_fn=lambda x: {
-            'audio': torch.nn.utils.rnn.pad_sequence(
-                [s['audio'].squeeze(0)[:16000*30] for s in x],  # Limit to 30 seconds
-                batch_first=True
-            ).unsqueeze(1),
-            'mel_spectrogram': torch.stack([s['mel_spectrogram'] for s in x]),
+            'audio': torch.stack([s['audio'] for s in x]),  # Audio is already properly shaped
             'text': [s['text'] for s in x],
             'language': [s['language'] for s in x],
             'emotion': torch.stack([s['emotion'] for s in x])
@@ -199,61 +220,46 @@ def train_zonos(
         for batch in tqdm(dataloader):
             optimizer.zero_grad()
             
+            # Move tensors to device
+            audio = batch['audio'].to(device)
+            emotions = batch['emotion'].to(device)
+            
             # Process each sample in the batch
             batch_loss = 0
-            for audio, mel_spec, text, language, emotion in zip(
-                batch['audio'], 
-                batch['mel_spectrogram'],
-                batch['text'], 
-                batch['language'],
-                batch['emotion']
-            ):
-                # Move tensors to device
-                audio = audio.to(device)
-                mel_spec = mel_spec.to(device)
-                emotion = emotion.to(device)
-                
+            for i in range(len(audio)):
                 # Create speaker embedding
-                speaker = model.make_speaker_embedding(audio.squeeze(0), dataset.sampling_rate)
+                speaker = model.make_speaker_embedding(audio[i], dataset.sampling_rate)  # No need for unsqueeze
                 
-                # Prepare conditioning with emotion
+                # Prepare conditioning with emotion vector
                 cond_dict = make_cond_dict(
-                    text=text,
+                    text=batch['text'][i],
                     speaker=speaker,
-                    language=language,
-                    emotion=emotion.tolist()  # Convert tensor to list for make_cond_dict
+                    language=batch['language'][i],
+                    emotion=emotions[i].tolist()
                 )
                 conditioning = model.prepare_conditioning(cond_dict)
                 
                 # Get target codes using the autoencoder
                 with torch.no_grad():
-                    target_codes = model.autoencoder.encode(audio)
+                    target_codes = model.autoencoder.encode(audio[i].unsqueeze(0))  # Add batch dimension for autoencoder
                 
                 # Forward pass
                 output = model(conditioning)
                 
-                # Calculate losses
+                # Calculate token prediction loss
                 token_loss = torch.nn.functional.cross_entropy(
                     output.view(-1, output.size(-1)),
                     target_codes.view(-1)
                 )
                 
-                # Add mel spectrogram reconstruction loss
-                mel_loss = torch.nn.functional.mse_loss(
-                    model.autoencoder.decode(output.argmax(dim=-1)),
-                    mel_spec
-                )
-                
-                # Combined loss
-                loss = token_loss + 0.1 * mel_loss
-                batch_loss += loss
+                batch_loss += token_loss
             
             # Average loss over batch
             batch_loss = batch_loss / batch_size
             
             # Backward pass
             batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
             
@@ -284,7 +290,7 @@ if __name__ == "__main__":
         dataset_name="mozilla-foundation/common_voice_17_0",
         language="uz",
         output_dir="checkpoints",
-        batch_size=8,
+        batch_size=4,
         num_epochs=10,
         emotion_labels_path="emotion_labels.json"  # Optional path to emotion labels
     ) 
