@@ -281,10 +281,11 @@ def train_zonos(
                 output = output[..., :seq_len, :]  # [batch_size, num_codebooks, seq_len, vocab_size]
                 target_codes = target_codes[..., :seq_len]  # [num_codebooks, seq_len]
                 
-                # Reshape for cross entropy - fixed dimensions
+                # Reshape for cross entropy - fixed dimensions for 4D tensor
                 output = output.squeeze(0)  # Remove batch dimension: [num_codebooks, seq_len, vocab_size]
                 output = output.permute(1, 0, 2)  # [seq_len, num_codebooks, vocab_size]
-                output = output.reshape(-1, output.size(-1))  # [seq_len * num_codebooks, vocab_size]
+                output = output.contiguous().view(-1, output.size(-1))  # [seq_len * num_codebooks, vocab_size]
+                target_codes = target_codes.transpose(0, 1)  # [seq_len, num_codebooks]
                 target_codes = target_codes.reshape(-1)  # [seq_len * num_codebooks]
                 
                 token_loss = torch.nn.functional.cross_entropy(output, target_codes)
