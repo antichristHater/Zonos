@@ -211,6 +211,27 @@ class Zonos(nn.Module):
             ]
         )
 
+    def forward(self, prefix_conditioning: torch.Tensor) -> torch.Tensor:
+        """Forward pass of the model.
+        
+        Args:
+            prefix_conditioning: Tensor of shape [batch_size, seq_len, d_model] containing the conditioning information
+            
+        Returns:
+            Tensor of logits for next token prediction
+        """
+        # Setup inference parameters for the current batch
+        batch_size = prefix_conditioning.shape[0] // 2  # Divide by 2 because of CFG
+        inference_params = self.setup_cache(batch_size=batch_size * 2, max_seqlen=prefix_conditioning.shape[1])
+        
+        # Pass through backbone
+        hidden_states = self.backbone(prefix_conditioning, inference_params)
+        
+        # Get logits from the final hidden states
+        logits = self.apply_heads(hidden_states)
+        
+        return logits
+
     def can_use_cudagraphs(self) -> bool:
         # Only the mamba-ssm backbone supports CUDA Graphs at the moment
         return self.device.type == "cuda" and "_mamba_ssm" in str(self.backbone.__class__)
