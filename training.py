@@ -221,14 +221,14 @@ def train_zonos(
             optimizer.zero_grad()
             
             # Move tensors to device
-            audio = batch['audio'].to(device)
+            audio = batch['audio'].to(device)  # Shape: [batch_size, 480000]
             emotions = batch['emotion'].to(device)
             
             # Process each sample in the batch
             batch_loss = 0
             for i in range(len(audio)):
-                # Create speaker embedding
-                speaker = model.make_speaker_embedding(audio[i], dataset.sampling_rate)  # No need for unsqueeze
+                # Create speaker embedding from the audio
+                speaker = model.make_speaker_embedding(audio[i], dataset.sampling_rate)  # Shape: [1, 256]
                 
                 # Prepare conditioning with emotion vector
                 cond_dict = make_cond_dict(
@@ -240,8 +240,31 @@ def train_zonos(
                 conditioning = model.prepare_conditioning(cond_dict)
                 
                 # Get target codes using the autoencoder
+                # Ensure audio is properly shaped for the autoencoder
+                audio_input = audio[i].unsqueeze(0)  # Add batch dimension: [1, 480000]
+                if audio_input.dim() == 1:
+                    audio_input = audio_input.unsqueeze(0)  # Add batch dimension if needed
+                if audio_input.dim() == 2:
+                    audio_input = audio_input.unsqueeze(1)  # Add channel dimension if needed
+                
+                # Resample to 44.1kHz for DAC
+                if dataset.sampling_rate != 44100:
+                    audio_input = torchaudio.functional.resample(
+                        audio_input, 
+                        dataset.sampling_rate, 
+                        44100
+                    )
+                
+                # Ensure proper padding for DAC
+                target_length = int(44100 * 30)  # 30 seconds at 44.1kHz
+                if audio_input.size(-1) < target_length:
+                    pad_length = target_length - audio_input.size(-1)
+                    audio_input = torch.nn.functional.pad(audio_input, (0, pad_length))
+                elif audio_input.size(-1) > target_length:
+                    audio_input = audio_input[..., :target_length]
+                
                 with torch.no_grad():
-                    target_codes = model.autoencoder.encode(audio[i].unsqueeze(0))  # Add batch dimension for autoencoder
+                    target_codes = model.autoencoder.encode(audio_input)  # Should now work with shape [1, 1, 1323000]
                 
                 # Forward pass
                 output = model(conditioning)
