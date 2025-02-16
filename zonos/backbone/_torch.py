@@ -64,7 +64,8 @@ class TorchZonosBackbone(nn.Module):
     def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype = torch.bfloat16):
         # TODO: This function should be pure
         head_dim = self.config.d_model // self.config.attn_cfg["num_heads"]
-        self.freqs_cis = precompute_freqs_cis(16384, head_dim)
+        device = next(self.parameters()).device
+        self.freqs_cis = precompute_freqs_cis(16384, head_dim).to(device)
         return {
             i: layer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype)
             for i, layer in enumerate(self.layers)
@@ -73,9 +74,12 @@ class TorchZonosBackbone(nn.Module):
     def forward(self, hidden_states: torch.Tensor, inference_params: InferenceParams) -> torch.Tensor:
         device = hidden_states.device
         input_pos = torch.arange(0, hidden_states.shape[1], device=device)
-        input_pos = input_pos + inference_params.lengths_per_sample.to(device).unsqueeze(-1)
+        lengths_per_sample = inference_params.lengths_per_sample.to(device)
+        input_pos = input_pos + lengths_per_sample.unsqueeze(-1)
 
-        freqs_cis = self.freqs_cis[input_pos].expand(hidden_states.shape[0], -1, -1, -1)
+        freqs_cis = self.freqs_cis.to(device)
+        freqs_cis = freqs_cis[input_pos].expand(hidden_states.shape[0], -1, -1, -1)
+        
         for i, layer in enumerate(self.layers):
             hidden_states = layer(hidden_states, inference_params, freqs_cis)
         return self.norm_f(hidden_states)
@@ -95,7 +99,8 @@ class TransformerBlock(nn.Module):
         self.head_dim = config.d_model // config.attn_cfg["num_heads"]
 
     def allocate_inference_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype = torch.bfloat16):
-        return torch.empty(batch_size, max_seqlen, 2, self.num_heads_kv, self.head_dim, dtype=dtype), None
+        device = next(self.parameters()).device
+        return torch.empty(batch_size, max_seqlen, 2, self.num_heads_kv, self.head_dim, dtype=dtype, device=device), None
 
     def forward(self, x: torch.Tensor, inference_params: InferenceParams, freqs_cis: torch.Tensor) -> torch.Tensor:
         x = x + self.mixer(self.norm(x), inference_params, freqs_cis)
