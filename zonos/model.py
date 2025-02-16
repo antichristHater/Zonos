@@ -198,7 +198,7 @@ class Zonos(nn.Module):
     def setup_cache(self, batch_size: int, max_seqlen: int, dtype: torch.dtype = torch.bfloat16) -> InferenceParams:
         max_seqlen = find_multiple(max_seqlen, 8)
         key_value_memory_dict = self.backbone.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype)
-        lengths_per_sample = torch.full((batch_size,), 0, dtype=torch.int32)
+        lengths_per_sample = torch.full((batch_size,), 0, dtype=torch.int32, device=self.device)
         return InferenceParams(max_seqlen, batch_size, 0, 0, key_value_memory_dict, lengths_per_sample)
 
     def prepare_conditioning(self, cond_dict: dict, uncond_dict: dict | None = None) -> torch.Tensor:

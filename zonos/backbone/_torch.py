@@ -71,8 +71,9 @@ class TorchZonosBackbone(nn.Module):
         }
 
     def forward(self, hidden_states: torch.Tensor, inference_params: InferenceParams) -> torch.Tensor:
-        input_pos = torch.arange(0, hidden_states.shape[1], device=hidden_states.device)
-        input_pos = input_pos + inference_params.lengths_per_sample.unsqueeze(-1)
+        device = hidden_states.device
+        input_pos = torch.arange(0, hidden_states.shape[1], device=device)
+        input_pos = input_pos + inference_params.lengths_per_sample.to(device).unsqueeze(-1)
 
         freqs_cis = self.freqs_cis[input_pos].expand(hidden_states.shape[0], -1, -1, -1)
         for i, layer in enumerate(self.layers):
