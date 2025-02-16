@@ -265,15 +265,17 @@ def train_zonos(
                 
                 with torch.no_grad():
                     target_codes = model.autoencoder.encode(audio_input)  # Should now work with shape [1, 1, 1323000]
+                    target_codes = target_codes.to(device)
                 
                 # Forward pass
                 output = model(conditioning)
                 
                 # Calculate token prediction loss
-                token_loss = torch.nn.functional.cross_entropy(
-                    output.view(-1, output.size(-1)),
-                    target_codes.view(-1)
-                )
+                # Reshape output and target_codes to match dimensions
+                output = output.view(-1, output.size(-1))  # [batch * seq_len, vocab_size]
+                target_codes = target_codes.view(-1)  # [batch * seq_len]
+                
+                token_loss = torch.nn.functional.cross_entropy(output, target_codes)
                 
                 batch_loss += token_loss
             
