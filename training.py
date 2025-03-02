@@ -282,7 +282,8 @@ def train_zonos(
                 target_codes = target_codes[..., :seq_len]  # [num_codebooks, seq_len]
                 
                 # Reshape for cross entropy - fixed dimensions for 4D tensor
-                output = output.squeeze(0)  # Remove batch dimension: [num_codebooks, seq_len, vocab_size]
+                # output = output.squeeze(0)  # Remove batch dimension: [num_codebooks, seq_len, vocab_size]
+                output = output[0]
                 output = output.permute(1, 0, 2)  # [seq_len, num_codebooks, vocab_size]
                 output = output.contiguous().view(-1, output.size(-1))  # [seq_len * num_codebooks, vocab_size]
                 target_codes = target_codes.transpose(0, 1)  # [seq_len, num_codebooks]
