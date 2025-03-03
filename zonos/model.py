@@ -92,7 +92,7 @@ class Zonos(nn.Module):
         if self.spk_clone_model is None:
             self.spk_clone_model = SpeakerEmbeddingLDA()
         _, spk_embedding = self.spk_clone_model(wav.to(self.spk_clone_model.device), sr)
-        return spk_embedding.unsqueeze(0).float16()
+        return spk_embedding.unsqueeze(0).to(torch.float16)
 
     def embed_codes(self, codes: torch.Tensor) -> torch.Tensor:
         return sum(emb(codes[:, i]) for i, emb in enumerate(self.embeddings))
