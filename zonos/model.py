@@ -236,7 +236,7 @@ class Zonos(nn.Module):
         # Only the mamba-ssm backbone supports CUDA Graphs at the moment
         return self.device.type == "cuda" and "_mamba_ssm" in str(self.backbone.__class__)
 
-    @torch.inference_mode()
+    # @torch.inference_mode()
     def generate(
         self,
         prefix_conditioning: torch.Tensor,  # [bsz, cond_seq_len, d_model]
