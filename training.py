@@ -295,6 +295,8 @@ def train_zonos(
             
             # Average loss over batch
             batch_loss = batch_loss / batch_size
+
+            print("Batch loss:", batch_loss)
             
             # Backward pass
             batch_loss.backward()
@@ -327,9 +329,9 @@ if __name__ == "__main__":
     train_zonos(
         model_path="Zyphra/Zonos-v0.1-transformer",
         dataset_name="mozilla-foundation/common_voice_17_0",
-        language="uz",
+        language="tr",
         output_dir="checkpoints",
         batch_size=4,
         num_epochs=10,
-        emotion_labels_path="emotion_labels.json"  # Optional path to emotion labels
+        # emotion_labels_path="emotion_labels.json"  # Optional path to emotion labels
     ) 
