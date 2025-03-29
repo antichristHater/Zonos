@@ -176,15 +176,16 @@ def generate_audio(
         progress((step, estimated_total_steps))
         return True
 
-    codes = selected_model.generate(
-        prefix_conditioning=conditioning,
-        audio_prefix_codes=audio_prefix_codes,
-        max_new_tokens=max_new_tokens,
-        cfg_scale=cfg_scale,
-        batch_size=1,
-        sampling_params=dict(min_p=min_p),
-        callback=update_progress,
-    )
+    with torch.no_grad():
+        codes = selected_model.generate(
+            prefix_conditioning=conditioning,
+            audio_prefix_codes=audio_prefix_codes,
+            max_new_tokens=max_new_tokens,
+            cfg_scale=cfg_scale,
+            batch_size=1,
+            sampling_params=dict(min_p=min_p),
+            callback=update_progress,
+        )
 
     wav_out = selected_model.autoencoder.decode(codes).cpu().detach()
     sr_out = selected_model.autoencoder.sampling_rate

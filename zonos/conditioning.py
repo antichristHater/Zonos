@@ -47,7 +47,7 @@ class Conditioner(nn.Module):
             return self.uncond_vector.data.view(1, 1, -1)
 
         cond = self.apply_cond(*inputs)
-        cond = self.project(cond.to(torch.bfloat16))
+        cond = self.project(cond.to(torch.float32))
         return cond
 
 
